@@ -137,9 +137,12 @@ const GuardDashboard = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isScanningFace, setIsScanningFace] = useState(false);
   
-  // Search state
+  // Search state for Manual Receipt Scan
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  
+  // NEW: Search state for Pending Queue filtering
+  const [pendingSearchQuery, setPendingSearchQuery] = useState("");
 
   const [updateMessage, setUpdateMessage] = useState(null);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -187,7 +190,6 @@ const GuardDashboard = () => {
     setIsLiveFeedActive(false);
   };
 
-  // ----- MANUAL SEARCH HANDLER -----
   const handleManualSearch = async () => {
     if (!searchQuery.trim()) return;
     
@@ -255,7 +257,7 @@ const GuardDashboard = () => {
 
       if (data.success && data.visitor) {
         setScanResult(data);
-        fetchVisitors(); // instantly clear from pending queue upon auto-approve
+        fetchVisitors(); 
         openReceiptWindow(data.visitor);
       } else {
         setScanResult(data);
@@ -321,7 +323,7 @@ const GuardDashboard = () => {
             visitor: matchingVisitor
         });
 
-        fetchVisitors(); // instantly clear from pending queue upon auto-approve
+        fetchVisitors();
 
         if (data.visitor) {
             openReceiptWindow(data.visitor);
@@ -373,7 +375,19 @@ const GuardDashboard = () => {
     }
   };
 
-  const pendingForms = recentVisitors.filter(v => v.status === 'pending_review' || !v.status);
+  // NEW: Filter pending forms based on the pendingSearchQuery
+  const pendingForms = recentVisitors.filter(v => {
+    const isPending = v.status === 'pending_review' || !v.status;
+    if (!isPending) return false;
+    
+    if (!pendingSearchQuery.trim()) return true;
+    
+    const query = pendingSearchQuery.trim().toLowerCase();
+    const visitorName = v.name ? v.name.toLowerCase() : "";
+    const hostName = v.hostName ? v.hostName.toLowerCase() : "";
+    
+    return visitorName.includes(query) || hostName.includes(query);
+  });
 
   return (
     <div className="min-h-screen bg-gray-900 p-8 pt-28 text-white overflow-x-hidden">
@@ -394,9 +408,22 @@ const GuardDashboard = () => {
         )}
 
         <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700 mb-8 overflow-x-auto">
-          <h2 className="text-xl font-bold mb-4 flex items-center gap-2">
-            <Clock className="text-yellow-400" /> Pending Gate Passes
-          </h2>
+          {/* NEW: Search Bar inside the Pending Gate Passes header */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <Clock className="text-yellow-400" /> Pending Gate Passes
+            </h2>
+            <div className="relative w-full sm:w-64">
+              <input 
+                type="text" 
+                placeholder="Search pending by name..." 
+                value={pendingSearchQuery}
+                onChange={(e) => setPendingSearchQuery(e.target.value)}
+                className="w-full bg-gray-900 border border-gray-600 text-white text-sm rounded-lg pl-10 pr-3 py-2 focus:outline-none focus:border-blue-500"
+              />
+              <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+            </div>
+          </div>
           
           <div className="min-w-full">
             <table className="w-full text-left text-sm text-gray-300 whitespace-nowrap">
@@ -413,7 +440,7 @@ const GuardDashboard = () => {
                 {pendingForms.length === 0 ? (
                   <tr>
                     <td colSpan="5" className="p-6 text-center text-gray-500 font-medium">
-                      No pending passes at the gate.
+                      {pendingSearchQuery.trim() ? "No pending passes match your search." : "No pending passes at the gate."}
                     </td>
                   </tr>
                 ) : (
@@ -494,7 +521,6 @@ const GuardDashboard = () => {
               <span>Scan & Search Results</span>
             </h2>
 
-            {/* MANUAL SEARCH BAR */}
             <div className="flex flex-col sm:flex-row gap-2 mb-6 border-b border-gray-700 pb-4">
               <input 
                 type="text" 
