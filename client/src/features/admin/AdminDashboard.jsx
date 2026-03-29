@@ -29,6 +29,7 @@ const compressImage = (file) => {
 // Internal Component for the PDF-based Student Form
 const StudentRegistrationForm = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [studentPhotoFile, setStudentPhotoFile] = useState(null); // NEW: State for compulsory student photo
 
   const { register, handleSubmit, control, watch, formState: { errors }, reset } = useForm({
     resolver: zodResolver(studentRegistrationSchema),
@@ -42,6 +43,16 @@ const StudentRegistrationForm = () => {
   const onSubmit = async (data) => {
     setIsSubmitting(true);
     try {
+      // 🚨 Compulsory Student Photo Check
+      if (!studentPhotoFile) {
+        alert("Student Photo is a compulsory field. Please upload the student's photo.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Compress Student Photo
+      const studentPhotoB64 = await compressImage(studentPhotoFile);
+
       const processedPersons = await Promise.all(
         data.authorizedPersons.map(async (person) => {
           let b64 = null;
@@ -52,7 +63,8 @@ const StudentRegistrationForm = () => {
         })
       );
 
-      const finalPayload = { ...data, authorizedPersons: processedPersons };
+      // Append student photo to payload
+      const finalPayload = { ...data, studentPhoto: studentPhotoB64, authorizedPersons: processedPersons };
 
       const response = await fetch("http://localhost:5000/api/students", {
         method: "POST",
@@ -60,14 +72,13 @@ const StudentRegistrationForm = () => {
         body: JSON.stringify(finalPayload),
       });
 
-      // Parse the JSON response to capture exact backend error messages
       const resultData = await response.json();
 
       if (response.ok) {
         alert("Student Application Registered Successfully!");
         reset();
+        setStudentPhotoFile(null); // Reset the student photo state
       } else {
-        // Display specific backend error message so the user knows what to correct
         alert(`Submission Failed: ${resultData.error || 'Please check your input details and try again.'}`);
       }
     } catch (error) {
@@ -133,6 +144,27 @@ const StudentRegistrationForm = () => {
                 <option value="Other">Other</option>
               </select>
             </div>
+            {/* NEW: Compulsory Student Photo Upload */}
+            <div>
+              <label className="text-xs text-white/50 uppercase flex justify-between">
+                <span>Student Photo <span className="text-red-500">*</span></span>
+              </label>
+              <input 
+                type="file" 
+                id="student-photo-upload" 
+                className="hidden" 
+                accept="image/*" 
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) setStudentPhotoFile(e.target.files[0]);
+                }} 
+              />
+              <label 
+                htmlFor="student-photo-upload" 
+                className={`w-full mt-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border ${!studentPhotoFile ? 'border-red-500 text-red-400 bg-red-500/10' : 'border-[#1eb854] text-[#1eb854] bg-[#1eb854]/10'} cursor-pointer hover:bg-white/10 transition text-sm font-bold`}
+              >
+                <Upload size={18} /> {studentPhotoFile ? "Photo Uploaded Successfully" : "Upload Student Photo"}
+              </label>
+            </div>
           </div>
         </div>
 
@@ -161,7 +193,6 @@ const StudentRegistrationForm = () => {
                 max="1000000000"
                 required
                 onKeyDown={(e) => {
-                  // Prevent negative values and symbols
                   if (e.key === '-' || e.key === 'e' || e.key === '+') {
                     e.preventDefault();
                   }
@@ -181,9 +212,7 @@ const StudentRegistrationForm = () => {
                 title="Mobile number must be exactly 10 digits and cannot start with 0"
                 required
                 onInput={(e) => {
-                  // Instantly strip non-numeric characters
                   e.target.value = e.target.value.replace(/\D/g, ''); 
-                  // Instantly strip leading zeros
                   if (e.target.value.startsWith('0')) {
                      e.target.value = e.target.value.replace(/^0+/, ''); 
                   }
@@ -206,7 +235,6 @@ const StudentRegistrationForm = () => {
           <div className="flex justify-between items-center">
             <h3 className="text-[#1eb854] font-bold uppercase text-xs tracking-wider">Authorized Visitors / Correspondents ({fields.length}/4)</h3>
             
-            {/* 🚨 Disable button if there are already 4 authorized persons 🚨 */}
             {fields.length < 4 && (
               <button 
                 type="button" 
@@ -263,7 +291,6 @@ const StudentRegistrationForm = () => {
               </div>
             </div>
           ))}
-          {/* Display error message if the array length exceeds 4 (fallback validation message) */}
           {errors.authorizedPersons?.message && <span className="text-red-400 text-xs font-bold block">{errors.authorizedPersons.message}</span>}
         </div>
 
@@ -277,7 +304,7 @@ const StudentRegistrationForm = () => {
 
 
 const AdminDashboard = () => {
-  const [activeTab, setActiveTab] = useState('overview'); // Tab state
+  const [activeTab, setActiveTab] = useState('overview');
   const [visitors, setVisitors] = useState([]);
   const [isEditing, setIsEditing] = useState(null);
   const [editFormData, setEditFormData] = useState({});
@@ -335,7 +362,6 @@ const AdminDashboard = () => {
     });
   };
 
-  // Dashboard Stats
   const total = visitors.length;
   const approved = visitors.filter(v => v.status === 'approved').length;
   const pending = visitors.filter(v => v.status === 'pending_review' || !v.status).length;
