@@ -4,9 +4,15 @@ import { ShieldAlert, Camera, ScanFace, CheckCircle, XCircle, Clock, ExternalLin
 const openReceiptWindow = (data) => {
   if (!data) return;
   
-  const isStudent = data.visitorType === "student";
+  // Dynamically determine Identity based on Face Scan or Plate Scan
+  const isFaceVerified = !!data.verifiedName;
+  const isStudentSelf = data.verifiedRelation === "Self" || data.visitorType === "student";
+
+  const category = isStudentSelf ? "Student (Self Entry)" : (isFaceVerified ? `Authorized Visitor (${data.verifiedRelation})` : "Visitor / Parent");
+  const displayName = data.verifiedName || data.name || "N/A";
+  
   const generatedDate = new Date().toLocaleString();
-  const arrival = data.arrivalDate ? new Date(data.arrivalDate).toLocaleString() : "N/A";
+  const arrival = data.arrivalDate ? new Date(data.arrivalDate).toLocaleString() : new Date().toLocaleString();
   const departure = data.departureDate ? new Date(data.departureDate).toLocaleString() : "N/A";
 
   const rawStatus = data.status || 'approved';
@@ -28,7 +34,7 @@ const openReceiptWindow = (data) => {
   <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Gate Pass - ${data.receiptId || data._id}</title>
+      <title>Gate Pass - ${data.receiptId || data._id || 'Verified'}</title>
       <style>
           body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6; padding: 40px; display: flex; justify-content: center; }
           .card { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); max-width: 500px; width: 100%; border-top: 8px solid #1eb854; }
@@ -62,16 +68,25 @@ const openReceiptWindow = (data) => {
               <div class="status" style="background-color: ${statusBg}; color: ${statusColor};">${statusText}</div>
           </div>
           
-          <div class="row"><span class="label">Receipt ID</span><span class="value">${data.receiptId || data._id}</span></div>
-          <div class="row"><span class="label">Category</span><span class="value">${isStudent ? "Student" : "Visitor / Parent"}</span></div>
-          <div class="row"><span class="label">Full Name</span><span class="value">${data.name}</span></div>
+          <div class="row"><span class="label">Receipt ID</span><span class="value">${data.receiptId || data._id || 'Auto-Generated'}</span></div>
+          <div class="row"><span class="label">Category</span><span class="value">${category}</span></div>
+          <div class="row"><span class="label">Full Name</span><span class="value">${displayName}</span></div>
           
           <div class="section-title">Visit Details</div>
           <div class="row"><span class="label">Arrival</span><span class="value">${arrival}</span></div>
-          ${!isStudent ? `<div class="row"><span class="label">Departure</span><span class="value">${departure}</span></div>` : ''}
-          ${!isStudent ? `<div class="row"><span class="label">Total Members</span><span class="value">${data.totalPeople || 1}</span></div>` : ''}
+          ${!isStudentSelf ? `<div class="row"><span class="label">Departure</span><span class="value">${departure}</span></div>` : ''}
+          ${!isStudentSelf && data.totalPeople ? `<div class="row"><span class="label">Total Members</span><span class="value">${data.totalPeople}</span></div>` : ''}
           
-          ${isStudent && data.photo ? `
+          ${isFaceVerified && data.verifiedPhoto ? `
+              <div class="section-title">Verified Face Match</div>
+              <div class="photo-container">
+                  <div class="photo-card">
+                      <img src="${data.verifiedPhoto}" class="photo-img" alt="Verified Person" />
+                  </div>
+              </div>
+          ` : ''}
+
+          ${!isFaceVerified && isStudentSelf && data.photo ? `
               <div class="section-title">Student Photo</div>
               <div class="photo-container">
                   <div class="photo-card">
@@ -79,25 +94,13 @@ const openReceiptWindow = (data) => {
                   </div>
               </div>
           ` : ''}
-
-          ${!isStudent && data.members && data.members.length > 0 ? `
-              <div class="section-title">Visitor Photos</div>
-              <div class="photo-container">
-                  ${data.members.map(member => `
-                      <div class="photo-card">
-                          ${member.photo ? `<img src="${member.photo}" class="photo-img" alt="${member.name}" />` : `<div class="photo-img">No Photo</div>`}
-                          <span class="photo-name">${member.name}</span>
-                      </div>
-                  `).join('')}
-              </div>
-          ` : ''}
           
           <div class="section-title">Transport</div>
           <div class="row"><span class="label">Mode</span><span class="value">${data.transportMode || 'N/A'}</span></div>
           <div class="row"><span class="label">Vehicle No</span><span class="value">${data.vehicleNo || 'N/A'}</span></div>
           
-          <div class="section-title">${isStudent ? 'Academic Details' : 'Meeting Details'}</div>
-          ${isStudent ? `
+          <div class="section-title">${isStudentSelf ? 'Academic Details' : 'Host Student Details'}</div>
+          ${isStudentSelf ? `
               <div class="row"><span class="label">Student ID</span><span class="value">${data.studentId || 'N/A'}</span></div>
               <div class="row"><span class="label">Course</span><span class="value">${data.course || 'N/A'}</span></div>
               <div class="row"><span class="label">Hostel</span><span class="value">${data.hostelName || 'N/A'}</span></div>
@@ -137,11 +140,9 @@ const GuardDashboard = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isScanningFace, setIsScanningFace] = useState(false);
   
-  // Search state for Manual Receipt Scan
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   
-  // NEW: Search state for Pending Queue filtering
   const [pendingSearchQuery, setPendingSearchQuery] = useState("");
 
   const [updateMessage, setUpdateMessage] = useState(null);
@@ -201,7 +202,6 @@ const GuardDashboard = () => {
       const response = await fetch('http://localhost:5000/api/admin/visitors');
       if (response.ok) {
         const data = await response.json();
-        // Look for exact match of ID
         const foundVisitor = data.find(v => 
           (v.receiptId && v.receiptId === searchQuery.trim()) || 
           v._id === searchQuery.trim()
@@ -271,15 +271,35 @@ const GuardDashboard = () => {
     }
   };
 
+  const pendingForms = recentVisitors.filter(v => {
+    const isPending = v.status === 'pending_review' || !v.status;
+    if (!isPending) return false;
+    
+    if (!pendingSearchQuery.trim()) return true;
+    
+    const query = pendingSearchQuery.trim().toLowerCase();
+    const visitorName = v.name ? v.name.toLowerCase() : "";
+    const hostName = v.hostName ? v.hostName.toLowerCase() : "";
+    
+    return visitorName.includes(query) || hostName.includes(query);
+  });
+
   const handleFaceVerification = async () => {
     if (!isLiveFeedActive || !videoRef.current) return;
 
     let targetStudentId = null;
     let targetStudentName = null;
     
+    // 🔥 FIX: STRICTLY BIND TO THE INTENDED STUDENT. 
     if (scanResult && scanResult.success && !scanResult.isFaceAuth && scanResult.visitor) {
         targetStudentId = scanResult.visitor.hostId || scanResult.visitor.studentId;
         targetStudentName = scanResult.visitor.hostName || scanResult.visitor.name;
+    } else if (pendingForms && pendingForms.length > 0) {
+        // If they click Verify without searching, strictly target the top pending pass 
+        // to prevent cross-matching another random pending student!
+        const topVisitor = pendingForms[0];
+        targetStudentId = topVisitor.hostId || topVisitor.studentId;
+        targetStudentName = topVisitor.hostName || topVisitor.name;
     }
 
     setIsScanningFace(true);
@@ -309,25 +329,25 @@ const GuardDashboard = () => {
       const data = await response.json();
       
       if (data.success && data.person) {
-        const matchingVisitor = data.visitor || {
-            name: data.person.visitorName,
-            relation: data.person.relation,
-            hostName: data.person.studentName,
-            studentId: data.person.studentId
+        const matchingVisitor = {
+            ...(data.visitor || {}),
+            verifiedName: data.person.visitorName,
+            verifiedRelation: data.person.relation,
+            verifiedPhoto: data.person.visitorPhoto,
+            studentId: data.person.studentId,
+            hostName: data.person.studentName
         };
           
         setScanResult({
             success: true,
             isFaceAuth: true, 
-            message: data.message || "Authorized Family Member Found & Verified!",
+            message: data.message || "Authorized Person Found & Verified!",
             visitor: matchingVisitor
         });
 
         fetchVisitors();
+        openReceiptWindow(matchingVisitor);
 
-        if (data.visitor) {
-            openReceiptWindow(data.visitor);
-        }
       } else {
         setScanResult({
             success: false,
@@ -375,20 +395,6 @@ const GuardDashboard = () => {
     }
   };
 
-  // NEW: Filter pending forms based on the pendingSearchQuery
-  const pendingForms = recentVisitors.filter(v => {
-    const isPending = v.status === 'pending_review' || !v.status;
-    if (!isPending) return false;
-    
-    if (!pendingSearchQuery.trim()) return true;
-    
-    const query = pendingSearchQuery.trim().toLowerCase();
-    const visitorName = v.name ? v.name.toLowerCase() : "";
-    const hostName = v.hostName ? v.hostName.toLowerCase() : "";
-    
-    return visitorName.includes(query) || hostName.includes(query);
-  });
-
   return (
     <div className="min-h-screen bg-gray-900 p-8 pt-28 text-white overflow-x-hidden">
       <div className="max-w-6xl mx-auto">
@@ -408,7 +414,6 @@ const GuardDashboard = () => {
         )}
 
         <div className="bg-gray-800 rounded-xl p-6 shadow-lg border border-gray-700 mb-8 overflow-x-auto">
-          {/* NEW: Search Bar inside the Pending Gate Passes header */}
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4">
             <h2 className="text-xl font-bold flex items-center gap-2">
               <Clock className="text-yellow-400" /> Pending Gate Passes
@@ -511,7 +516,7 @@ const GuardDashboard = () => {
 
               <button onClick={handleFaceVerification} disabled={!isLiveFeedActive || isScanning || isScanningFace} className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 text-white font-bold py-3 px-4 rounded flex items-center justify-center gap-2 transition border border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.3)]">
                 <UserCheck className="flex-shrink-0" />
-                <span className="truncate">{isScanningFace ? "Verifying..." : "Verify Face (Parents)"}</span>
+                <span className="truncate">{isScanningFace ? "Verifying..." : "Verify Face (Parents/Students)"}</span>
               </button>
             </div>
           </div>
@@ -544,23 +549,39 @@ const GuardDashboard = () => {
             {isScanning && <div className="text-blue-400 text-center mt-10 animate-pulse font-semibold">Running Plate Analysis...</div>}
             {isScanningFace && <div className="text-purple-400 text-center mt-10 animate-pulse font-semibold">Verifying Face against Database...</div>}
             
+            {/* ====== SUCCESS: PLATE SCAN ====== */}
             {scanResult && scanResult.success && !scanResult.isFaceAuth && scanResult.visitor && (
               <div className="bg-green-900/20 border border-green-500/50 rounded-lg p-6 flex flex-col h-full overflow-hidden">
                 <div className="flex items-center gap-3 mb-4 text-green-400">
                   <CheckCircle className="w-8 h-8 flex-shrink-0" />
-                  <h3 className="text-2xl font-bold truncate">Match Found</h3>
+                  <h3 className="text-2xl font-bold truncate">Authorized Person</h3>
                 </div>
                 <p className="text-sm text-green-300 mb-6 break-words">{scanResult.message}</p>
                 <div className="space-y-4 mb-6">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm w-full">
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Visitor Name</span>
-                      <span className="font-semibold text-base md:text-lg block break-words">{scanResult.visitor.name || 'N/A'}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Host/Student</span>
-                      <span className="font-semibold text-base md:text-lg block break-words">{scanResult.visitor.hostName || 'N/A'}</span>
-                    </div>
+                    {scanResult.visitor.visitorType === 'student' ? (
+                      <>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student Name</span>
+                          <span className="font-semibold text-base md:text-lg block break-words">{scanResult.visitor.name || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student ID</span>
+                          <span className="font-semibold text-base md:text-lg block break-all">{scanResult.visitor.studentId || 'N/A'}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Visitor Name</span>
+                          <span className="font-semibold text-base md:text-lg block break-words">{scanResult.visitor.name || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student Name</span>
+                          <span className="font-semibold text-base md:text-lg block break-words">{scanResult.visitor.hostName || 'N/A'}</span>
+                        </div>
+                      </>
+                    )}
                     <div className="min-w-0">
                       <span className="text-gray-400 block truncate">Vehicle No</span>
                       <span className="font-semibold text-base md:text-lg block break-all">{scanResult.visitor.vehicleNo || 'N/A'}</span>
@@ -591,31 +612,48 @@ const GuardDashboard = () => {
               </div>
             )}
 
+            {/* ====== SUCCESS: FACE SCAN ====== */}
             {scanResult && scanResult.success && scanResult.isFaceAuth && scanResult.visitor && (
               <div className="bg-purple-900/20 border border-purple-500/50 rounded-lg p-6 flex flex-col h-full overflow-hidden">
                 <div className="flex items-center gap-3 mb-4 text-purple-400">
                   <UserCheck className="w-8 h-8 flex-shrink-0" />
-                  <h3 className="text-2xl font-bold truncate">Face Authorized</h3>
+                  <h3 className="text-2xl font-bold truncate">Authorized Person</h3>
                 </div>
                 <p className="text-sm text-purple-300 mb-6 break-words">{scanResult.message}</p>
                 <div className="space-y-4 mb-6">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm w-full">
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Authorized Name</span>
-                      <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.name || 'N/A'}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Relation</span>
-                      <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.relation || 'N/A'}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Student Name</span>
-                      <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.hostName || 'N/A'}</span>
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-gray-400 block truncate">Student ID</span>
-                      <span className="font-semibold text-base md:text-lg block text-white break-all">{scanResult.visitor.studentId || 'N/A'}</span>
-                    </div>
+                    {/* Explicitly display Student vs Visitor Info correctly */}
+                    {scanResult.visitor.verifiedRelation === 'Self' || scanResult.visitor.visitorType === 'student' ? (
+                      <>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student Name</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.verifiedName || scanResult.visitor.name || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student ID</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-all">{scanResult.visitor.studentId || 'N/A'}</span>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Visitor Name</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.verifiedName || scanResult.visitor.name || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Relation</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.verifiedRelation || scanResult.visitor.relation || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student Name</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-words">{scanResult.visitor.hostName || 'N/A'}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-gray-400 block truncate">Student ID</span>
+                          <span className="font-semibold text-base md:text-lg block text-white break-all">{scanResult.visitor.studentId || 'N/A'}</span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
                 
@@ -636,10 +674,13 @@ const GuardDashboard = () => {
               </div>
             )}
 
+            {/* ====== FAILURE: ACTION REQUIRED ====== */}
             {scanResult && !scanResult.success && (
               <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-6 text-center flex flex-col items-center justify-center h-full">
                 <ShieldAlert className="w-12 h-12 text-red-500 mx-auto mb-3 flex-shrink-0" />
-                <h3 className="text-2xl font-bold text-red-400 mb-2 truncate max-w-full">Action Required</h3>
+                <h3 className="text-2xl font-bold text-red-400 mb-2 truncate max-w-full">
+                  {scanResult.message && scanResult.message.toLowerCase().includes("student") ? "Unauthorized Student" : "Unauthorized Person"}
+                </h3>
                 <p className="text-red-300 break-words">{scanResult.message}</p>
               </div>
             )}
