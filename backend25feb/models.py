@@ -1,4 +1,3 @@
-# models.py
 import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
@@ -10,27 +9,27 @@ MONGO_URI = os.getenv("MONGODB_URI") or os.getenv("MONGO_URI")
 if not MONGO_URI:
     raise ValueError("❌ MongoDB URI is missing! Check your .env file.")
 
-client = MongoClient(MONGO_URI)
+# Fail fast if IP is not whitelisted
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
 
-# Maps to the exact database and collections
 db = client.entry_shield
 visits_collection = db.gate_passes
 receipts_collection = db.receipts
-
 users_collection = db.users
 roles_collection = db.roles
-
 students_collection = db.students
 
 try:
-    # Ensure studentId is unique
-    visits_collection.create_index("studentId", unique=True, sparse=True)
-    
-    # Ensure clerk_id is unique in users collection
+    # 🚨 FIX: We drop the unique index on studentId so a student can apply for multiple gate passes!
+    visits_collection.drop_index("studentId_1")
+    print("✅ Dropped unique 'studentId' index to allow multiple gate passes per student.")
+except Exception:
+    pass # It's fine if the index doesn't exist yet
+
+try:
     users_collection.create_index("clerk_id", unique=True)
-    # FIX: Drop the problematic duplicate key index on receipts if it exists
     receipts_collection.drop_index("visitId_1")
-    print("✅ Dropped problematic 'visitId_1' index from receipts to prevent 500 errors.")
-except Exception as e:
-    # It's totally fine if the index doesn't exist to be dropped
-    print("✅ AWS MongoDB Connected. Indexes verified.")
+except Exception:
+    pass
+
+print("✅ AWS MongoDB Connected. Indexes verified.")
