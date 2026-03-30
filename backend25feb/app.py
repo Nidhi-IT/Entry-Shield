@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from models import visits_collection, receipts_collection, users_collection, roles_collection, students_collection
@@ -196,6 +195,7 @@ def live_entry_test():
         detected_plate_text = sanitize_indian_plate(extract_plate_from_base64(live_frame_b64))
         
         if detected_plate_text and len(detected_plate_text) >= 4:
+            # 🔥 FIX: Added .sort([("_id", -1)]) to match the MOST RECENT plate receipt first
             cursor = visits_collection.find({
                 "vehicleNo": {"$exists": True, "$ne": ""},
                 "status": {"$in": ["pending_review", "approved"]}
@@ -207,7 +207,6 @@ def live_entry_test():
                 fuzzy_regex = build_db_fuzzy_regex(db_plate)
                 
                 if fuzzy_regex and re.search(fuzzy_regex, detected_plate_text):
-                    # Auto Update to Approved + Sync Receipts
                     visitor_id = visitor.get("_id")
                     visits_collection.update_one({"_id": visitor_id}, {"$set": {"status": "approved"}})
                     auto_sync_receipt_status(visitor_id, visitor, "approved")
@@ -295,7 +294,7 @@ def handle_students():
 def verify_authorized_face():
     data = request.json or {}
     live_frame_b64 = data.get("liveFrame")
-    raw_target_student_id = data.get("studentId")  
+    target_student_id = data.get("studentId")  
     
     if not live_frame_b64: return jsonify({"error": "No live frame provided"}), 400
 
@@ -305,21 +304,17 @@ def verify_authorized_face():
 
         search_status = {"$in": ["pending_review", "approved"]}
 
-        # 🔥 FIX: Clean and prepare the target ID to be strictly case-insensitive
-        target_student_id = str(raw_target_student_id).strip() if raw_target_student_id else None
-
         if target_student_id:
             expected_student_ids = [target_student_id]
-            # Use regex for case-insensitive matching in MongoDB
-            regex_target = re.compile(f"^{re.escape(target_student_id)}$", re.IGNORECASE)
+            # 🔥 FIX: Added sort=[("_id", -1)] to match the MOST RECENT face receipt first
             visit = visits_collection.find_one({
-                "$or": [{"hostId": regex_target}, {"studentId": regex_target}],
+                "$or": [{"hostId": target_student_id}, {"studentId": target_student_id}],
                 "status": search_status
             }, sort=[("_id", -1)])
-            
             if visit:
                 pending_visits_pool.append(visit)
         else:
+            # 🔥 FIX: Added .sort([("_id", -1)])
             pending_visits_pool = list(visits_collection.find({
                 "status": search_status
             }).sort([("_id", -1)]).limit(50))
@@ -329,30 +324,27 @@ def verify_authorized_face():
                 
             for v in pending_visits_pool:
                 sid = v.get("hostId") or v.get("studentId")
-                if sid:
-                    clean_sid = str(sid).strip()
-                    if clean_sid not in expected_student_ids:
-                        expected_student_ids.append(clean_sid)
+                if sid and sid not in expected_student_ids:
+                    expected_student_ids.append(sid)
 
         if not expected_student_ids:
             return jsonify({"success": False, "message": "No valid Student IDs found in pending visits."}), 404
 
-        # 🔥 FIX: Query the student collection using robust, case-insensitive logic
-        regex_sids = [re.compile(f"^{re.escape(sid)}$", re.IGNORECASE) for sid in expected_student_ids]
-        students = list(students_collection.find({"studentId": {"$in": regex_sids}}))
+        students = list(students_collection.find({"studentId": {"$in": expected_student_ids}}))
         
-        # Determine valid students
-        registered_students = [s for s in students if s.get("authorizedPersons") or s.get("studentPhoto")]
+        registered_ids = [s.get("studentId") for s in students if s.get("authorizedPersons") or s.get("studentPhoto")]
+        missing_ids = [sid for sid in expected_student_ids if sid not in registered_ids]
 
-        if not registered_students:
+        if not registered_ids:
+            missing_str = ", ".join(missing_ids)
             return jsonify({
                 "success": False, 
-                "message": "Student Registeration form not filled , Unauthorized student"
+                "message": f"Access Denied: The Student Registration (PDF form) has not been filled for Student ID '{missing_str}'. The visitor is not authorized."
             }), 404
 
         flattened_persons = []
-        for student in registered_students:
-            db_student_id = student.get("studentId", "N/A")
+        for student in students:
+            if student.get("studentId") not in registered_ids: continue
             
             if student.get("studentPhoto"):
                 flattened_persons.append({
@@ -360,7 +352,7 @@ def verify_authorized_face():
                     "visitorName": student.get("studentName", "Student (Self)"),
                     "relation": "Self",
                     "studentName": student.get("studentName", "N/A"),
-                    "studentId": db_student_id
+                    "studentId": student.get("studentId", "N/A")
                 })
                 
             for person in student.get("authorizedPersons", []):
@@ -370,23 +362,23 @@ def verify_authorized_face():
                         "visitorName": person.get("name"),
                         "relation": person.get("relation", "N/A"),
                         "studentName": student.get("studentName", "N/A"),
-                        "studentId": db_student_id 
+                        "studentId": student.get("studentId", "N/A") 
                     })
 
         if not flattened_persons: 
             return jsonify({
                 "success": False, 
-                "message": "Student Registeration form not filled , Unauthorized student"
+                "message": "Access Denied: No valid face photos found in the Student Registration."
             }), 404
 
         matched_person = match_face_in_db(live_frame_b64, flattened_persons)
         
         if matched_person:
-            matched_student_id = str(matched_person.get("studentId")).strip().lower()
+            matched_student_id = matched_person.get("studentId")
             
             latest_visit = None
             for v in pending_visits_pool:
-                v_sid = str(v.get("hostId") or v.get("studentId") or "").strip().lower()
+                v_sid = v.get("hostId") or v.get("studentId")
                 if v_sid == matched_student_id:
                     latest_visit = v
                     break
@@ -406,12 +398,12 @@ def verify_authorized_face():
             else:
                 return jsonify({
                     "success": False, 
-                    "message": "Unauthorized person. Face recognized but not linked to this student ID."
+                    "message": "Access Denied: Face recognized, but could not link it to a pending visitor form for that Student ID."
                 }), 404
         else:
             return jsonify({
                 "success": False, 
-                "message": "Unauthorized person. Face does not match the registered authorized list."
+                "message": "Access Denied: The person is not authorized. The visitor is not among the authorized person list for that particular student."
             }), 404
             
     except Exception as e:
